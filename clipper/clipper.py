@@ -247,8 +247,21 @@ def hype_highlights(loud, words, args):
             picked.append(c)
         if len(picked) >= args.count:
             break
+    if words:  # snap to sentence boundaries so clips start and end cleanly
+        sents = split_sentences(words)
+        starts = [words[s[0]]["start"] for s in sents]
+        ends = [words[s[-1]]["end"] for s in sents]
+        for c in picked:
+            near_s = [t for t in starts if abs(t - c["start"]) <= 4]
+            near_e = [t for t in ends if abs(t - c["end"]) <= 4]
+            if near_s:
+                c["start"] = max(0.0, min(near_s, key=lambda t: abs(t - c["start"])) - 0.15)
+            if near_e:
+                e = min(near_e, key=lambda t: abs(t - c["end"])) + 0.4
+                if e - c["start"] >= args.min_len * 0.8:
+                    c["end"] = e
     for c in picked:
-        idx = [k for k, w in enumerate(words) if w["start"] >= c["start"] and w["end"] <= c["end"]]
+        idx = [k for k, w in enumerate(words) if w["start"] >= c["start"] - 0.2 and w["end"] <= c["end"]]
         c["first"], c["last"] = (idx[0], idx[-1]) if idx else (None, None)
         if words and idx:
             c["score"] += 0.5 * hook_score([words[k] for k in idx])
@@ -394,6 +407,7 @@ def main():
     ap.add_argument("--crop-x", type=float, default=0.5, help="crop position 0=left 0.5=center 1=right")
     ap.add_argument("--no-captions", action="store_true")
     ap.add_argument("--title", action="store_true", help="show the clip's hook as a title bar on top")
+    ap.add_argument("--titles", help='your own title per clip, separated by |, e.g. "TITLE ONE|TITLE TWO"')
     ap.add_argument("--font", default="Arial")
     ap.add_argument("--font-size", type=int, default=86)
     ap.add_argument("--caption-y", type=int, default=520, help="caption distance from bottom (px)")
@@ -460,7 +474,10 @@ def main():
             ass = None
             if not args.no_captions and cw:
                 ass = out / f"clip_{n:02d}.ass"
-                write_ass(ass, cw, c["start"], c["end"], args, first_sentence if args.title else None)
+                custom = args.titles.split("|") if args.titles else []
+                title = (custom[n - 1].strip() if n <= len(custom) else
+                         first_sentence if args.title else None)
+                write_ass(ass, cw, c["start"], c["end"], args, title)
             render(video, out / name, ass, c["start"], c["end"], args)
         results.append({"file": name, "start": round(c["start"], 2), "end": round(c["end"], 2),
                         "length": round(c["end"] - c["start"], 1), "score": c["score"],

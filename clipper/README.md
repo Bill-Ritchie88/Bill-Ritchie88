@@ -65,6 +65,7 @@ The first run downloads the Whisper speech model. The transcript is cached in
 | `--layout blur\|crop\|fit\|stack` | blurred background (default), fill screen, black bars, or facecam-on-top split screen |
 | `--facecam "x,y,w,h"` | for `stack`: where the facecam is in the source video (pixels), e.g. `"15,430,425,266"` |
 | `--title` | hook text bar at the top of the clip |
+| `--titles "ONE|TWO|..."` | your own title for each clip, in order |
 | `--model tiny\|base\|small\|medium\|large-v3` | Whisper accuracy vs speed (default `small`) |
 | `--language en` | force language |
 | `--transcript file.srt` | use existing subtitles (.srt/.vtt) instead of Whisper |
