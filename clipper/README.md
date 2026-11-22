@@ -31,6 +31,13 @@ python3 clipper/clipper.py podcast.mp4 -n 8 --title
 # fill the whole screen (crop) instead of blurred background; shift crop left
 python3 clipper/clipper.py stream.mp4 --layout crop --crop-x 0.3
 
+# GAMING / STREAMS: pick by hype (screams, big reactions) instead of by words
+python3 clipper/clipper.py --url "https://youtu.be/VIDEO_ID" --mode hype -n 6 --title
+# long stream? download only part of it first (much faster)
+python3 clipper/clipper.py --url "https://youtu.be/VIDEO_ID" --section "0:30:00-1:30:00" --mode hype -n 6
+# hype mode without speech-to-text (fastest, no captions)
+python3 clipper/clipper.py stream.mp4 --mode hype --no-transcript -n 6
+
 # choose the moments yourself
 python3 clipper/clipper.py podcast.mp4 --times "1:20-1:55,12:03-12:40"
 
@@ -52,6 +59,8 @@ The first run downloads the Whisper speech model. The transcript is cached in
 | Option | What it does |
 |---|---|
 | `-n 8` | number of clips |
+| `--mode talk\|hype` | talk = podcasts (by what is said), hype = gaming/streams (by loud reactions) |
+| `--section "1:00:00-1:45:00"` | with `--url`, download only that part of a long stream |
 | `--min-len / --max-len / --target-len` | clip length in seconds (default 15 / 60 / 35) |
 | `--layout blur\|crop\|fit` | blurred background (default), fill screen, or black bars |
 | `--title` | hook text bar at the top of the clip |

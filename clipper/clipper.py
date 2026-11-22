@@ -208,6 +208,48 @@ def find_highlights(words, loud, args):
     return sorted(picked, key=lambda c: c["start"])
 
 
+def hype_highlights(loud, words, args):
+    """Gaming/stream mode: pick the most intense moments by audio energy.
+
+    Favors a loud peak (scream, explosion, big reaction) that lands in the
+    middle-to-late part of the clip, so the clip has build-up and payoff.
+    """
+    n = len(loud)
+    mean = sum(loud) / n
+    std = math.sqrt(sum((x - mean) ** 2 for x in loud) / n) or 1.0
+    z = [(x - mean) / std for x in loud]
+    sm = [sum(z[max(0, i - 1):i + 2]) / len(z[max(0, i - 1):i + 2]) for i in range(n)]
+    lengths = range(int(args.min_len), int(args.max_len) + 1, 5)
+    cands = []
+    for L in lengths:
+        for s in range(0, max(1, n - L), 2):
+            seg = sm[s:s + L]
+            if len(seg) < L:
+                continue
+            third = max(1, L // 3)
+            peak = max(seg)
+            pos = seg.index(peak) / L
+            build = sum(seg[-third:]) / third - sum(seg[:third]) / third
+            score = (2.0 * peak + 0.3 * sum(seg) / L + 0.15 * max(build, 0)
+                     + (1.0 if 0.35 <= pos <= 0.85 else 0.0)
+                     + 2.0 * (1 - abs(L - args.target_len) / args.max_len))
+            cands.append({"start": float(s), "end": float(s + L), "score": score})
+    cands.sort(key=lambda c: c["score"], reverse=True)
+    picked = []
+    for c in cands:
+        if all(c["end"] + 3 <= p["start"] or c["start"] >= p["end"] + 3 for p in picked):
+            picked.append(c)
+        if len(picked) >= args.count:
+            break
+    for c in picked:
+        idx = [k for k, w in enumerate(words) if w["start"] >= c["start"] and w["end"] <= c["end"]]
+        c["first"], c["last"] = (idx[0], idx[-1]) if idx else (None, None)
+        if words and idx:
+            c["score"] += 0.5 * hook_score([words[k] for k in idx])
+        c["score"] = round(c["score"], 2)
+    return sorted(picked, key=lambda c: c["start"])
+
+
 def manual_clips(spec, words):
     clips = []
     for part in spec.split(","):
@@ -297,12 +339,17 @@ def render(video, out_path, ass_file, start, end, args):
 
 
 # ------------------------------------------------------------------- main
-def download(url, workdir):
+def download(url, workdir, section=None):
     if not shutil.which("yt-dlp"):
         sys.exit("yt-dlp is not installed. Run: pip install yt-dlp  (or download the video yourself)")
+    for old in workdir.glob("source.*"):
+        old.unlink()
     out = workdir / "source.%(ext)s"
-    subprocess.run(["yt-dlp", "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
-                    "--merge-output-format", "mp4", "-o", str(out), url], check=True)
+    cmd = ["yt-dlp", "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
+           "--merge-output-format", "mp4", "-o", str(out)]
+    if section:  # only download part of a long stream, e.g. "1:00:00-1:45:00"
+        cmd += ["--download-sections", f"*{section}", "--force-keyframes-at-cuts"]
+    subprocess.run(cmd + [url], check=True)
     return next(workdir.glob("source.*"))
 
 
@@ -311,12 +358,18 @@ def main():
     ap.add_argument("video", nargs="?", help="input video file")
     ap.add_argument("--url", help="download the video with yt-dlp instead (only if you have rights)")
     ap.add_argument("-o", "--out", default="clips", help="output folder (default: clips)")
+    ap.add_argument("--section", help='with --url: download only this part, e.g. "1:00:00-1:45:00"')
     ap.add_argument("-n", "--count", type=int, default=5, help="number of clips (default 5)")
+    ap.add_argument("--mode", choices=["talk", "hype"], default="talk",
+                    help="talk = podcasts/interviews (by what is said); "
+                         "hype = gaming/streams (by loud reactions & intensity)")
     ap.add_argument("--times", help='pick clips yourself, e.g. "1:20-1:55,12:03-12:40"')
-    ap.add_argument("--min-len", type=float, default=15)
-    ap.add_argument("--max-len", type=float, default=60)
-    ap.add_argument("--target-len", type=float, default=35)
+    ap.add_argument("--min-len", type=float, default=None, help="default 15 (talk) / 12 (hype)")
+    ap.add_argument("--max-len", type=float, default=None, help="default 60 (talk) / 45 (hype)")
+    ap.add_argument("--target-len", type=float, default=None, help="default 35 (talk) / 25 (hype)")
     ap.add_argument("--transcript", help="use an existing .srt/.vtt instead of Whisper")
+    ap.add_argument("--no-transcript", action="store_true",
+                    help="skip speech-to-text (hype mode only; fast, but no captions)")
     ap.add_argument("--model", default="small", help="Whisper model: tiny/base/small/medium/large-v3")
     ap.add_argument("--language", default=None, help="force language, e.g. en")
     ap.add_argument("--retranscribe", action="store_true", help="ignore cached transcript")
@@ -333,6 +386,10 @@ def main():
     ap.add_argument("--no-uppercase", dest="uppercase", action="store_false")
     ap.add_argument("--dry-run", action="store_true", help="only list picked moments, don't render")
     args = ap.parse_args()
+    hype = args.mode == "hype"
+    for name, talk_v, hype_v in (("min_len", 15, 12), ("max_len", 60, 45), ("target_len", 35, 25)):
+        if getattr(args, name) is None:
+            setattr(args, name, hype_v if hype else talk_v)
 
     if not shutil.which("ffmpeg"):
         sys.exit("ffmpeg is required. Install it: https://ffmpeg.org/download.html")
@@ -342,7 +399,7 @@ def main():
     work.mkdir(exist_ok=True)
 
     if args.url:
-        video = download(args.url, work)
+        video = download(args.url, work, args.section)
     elif args.video:
         video = Path(args.video)
     else:
@@ -352,13 +409,16 @@ def main():
 
     length = duration_of(video)
     print(f"Video: {video} ({ts(length)})")
-    words = get_transcript(args, video, work)
-    if not words and not args.times:
-        sys.exit("No speech found in transcript. Use --times to pick clips manually.")
+    words = [] if (args.no_transcript and hype) else get_transcript(args, video, work)
+    if not words and not args.times and not hype:
+        sys.exit("No speech found in transcript. Use --times, or --mode hype for gaming streams.")
     print(f"Transcript: {len(words)} words")
 
     if args.times:
         clips = manual_clips(args.times, words)
+    elif hype:
+        print("Finding hype moments...")
+        clips = hype_highlights(loudness_per_second(video, length), words, args)
     else:
         print("Scoring moments...")
         clips = find_highlights(words, loudness_per_second(video, length), args)
