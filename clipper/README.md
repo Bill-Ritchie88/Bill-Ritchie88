@@ -62,7 +62,8 @@ The first run downloads the Whisper speech model. The transcript is cached in
 | `--mode talk\|hype` | talk = podcasts (by what is said), hype = gaming/streams (by loud reactions) |
 | `--section "1:00:00-1:45:00"` | with `--url`, download only that part of a long stream |
 | `--min-len / --max-len / --target-len` | clip length in seconds (default 15 / 60 / 35) |
-| `--layout blur\|crop\|fit` | blurred background (default), fill screen, or black bars |
+| `--layout blur\|crop\|fit\|stack` | blurred background (default), fill screen, black bars, or facecam-on-top split screen |
+| `--facecam "x,y,w,h"` | for `stack`: where the facecam is in the source video (pixels), e.g. `"15,430,425,266"` |
 | `--title` | hook text bar at the top of the clip |
 | `--model tiny\|base\|small\|medium\|large-v3` | Whisper accuracy vs speed (default `small`) |
 | `--language en` | force language |

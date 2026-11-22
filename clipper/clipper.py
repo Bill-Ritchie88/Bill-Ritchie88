@@ -76,7 +76,13 @@ def transcribe(video, model_name, language):
                  "(or pass --transcript your_subtitles.srt)")
     print(f"Transcribing with Whisper '{model_name}' (first run downloads the model)...")
     model = WhisperModel(model_name, device="auto", compute_type="int8")
-    segments, info = model.transcribe(str(video), word_timestamps=True, vad_filter=True,
+    # decode audio with ffmpeg (16 kHz mono float) - avoids PyAV version problems
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(video), "-vn",
+                          "-ac", "1", "-ar", "16000", "-f", "f32le", "-"],
+                         check=True, capture_output=True).stdout
+    audio = np.frombuffer(raw, dtype=np.float32)
+    segments, info = model.transcribe(audio, word_timestamps=True, vad_filter=True,
                                       language=language)
     words = []
     for seg in segments:
@@ -318,7 +324,15 @@ def write_ass(path, words, clip_start, clip_end, args, title=None):
 
 # ----------------------------------------------------------------- render
 def render(video, out_path, ass_file, start, end, args):
-    if args.layout == "crop":
+    if args.layout == "stack":
+        # facecam on top, gameplay below (classic streamer clip layout)
+        fx, fy, fw, fh = (int(v) for v in args.facecam.split(","))
+        top = int(W * fh / fw) // 2 * 2
+        bot = H - top
+        gw = f"trunc(ih*{W}/{bot}/2)*2"
+        vf = (f"split[a][b];[a]crop={fw}:{fh}:{fx}:{fy},scale={W}:{top}[cam];"
+              f"[b]crop={gw}:ih:(iw-{gw})*{args.crop_x}:0,scale={W}:{bot}[g];[cam][g]vstack")
+    elif args.layout == "crop":
         vf = (f"scale=-2:{H},crop={W}:{H}:(iw-{W})*{args.crop_x}:0")
     elif args.layout == "fit":
         vf = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
@@ -373,8 +387,10 @@ def main():
     ap.add_argument("--model", default="small", help="Whisper model: tiny/base/small/medium/large-v3")
     ap.add_argument("--language", default=None, help="force language, e.g. en")
     ap.add_argument("--retranscribe", action="store_true", help="ignore cached transcript")
-    ap.add_argument("--layout", choices=["blur", "crop", "fit"], default="blur",
-                    help="blur = full frame on blurred background (default), crop = fill screen")
+    ap.add_argument("--layout", choices=["blur", "crop", "fit", "stack"], default="blur",
+                    help="blur = full frame on blurred background (default), crop = fill screen, "
+                         "stack = facecam on top + gameplay below (needs --facecam)")
+    ap.add_argument("--facecam", help='facecam box in the source video as "x,y,w,h" pixels, e.g. "15,430,425,266"')
     ap.add_argument("--crop-x", type=float, default=0.5, help="crop position 0=left 0.5=center 1=right")
     ap.add_argument("--no-captions", action="store_true")
     ap.add_argument("--title", action="store_true", help="show the clip's hook as a title bar on top")
@@ -391,6 +407,8 @@ def main():
         if getattr(args, name) is None:
             setattr(args, name, hype_v if hype else talk_v)
 
+    if args.layout == "stack" and not args.facecam:
+        ap.error('--layout stack needs --facecam "x,y,w,h"')
     if not shutil.which("ffmpeg"):
         sys.exit("ffmpeg is required. Install it: https://ffmpeg.org/download.html")
     out = Path(args.out)
